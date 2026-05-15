@@ -1,18 +1,35 @@
-[tool.poetry]
-name = "labrat"
-version = "0.1.1"
-description = "A framework for running experiments in parallel."
-authors = ["Jeremy Silver <jeremys@nessiness.com>"]
-
-[tool.poetry.dependencies]
-python = "^3.9"
-colorlog = "*"
-fancy_dataclass = ">= 0.1"
-sqlalchemy = "*"
-toml = "*"
-
-[tool.poetry.dev-dependencies]
-
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "labrat"
+dynamic = ["version"]
+description = "A framework for running experiments in parallel."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {file = "LICENSE"}
+authors = [
+  { name = "Jeremy Silver", email = "jeremys@nessiness.com" }
+]
+classifiers = [
+  "Programming Language :: Python"
+]
+dependencies = [
+    "colorlog",
+    "fancy_dataclass",
+    "sqlalchemy",
+    "toml",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.sdist]
+include = ["/labrat"]
+
+[tool.hatch.version]
+path = "labrat/__init__.py"
+
+[tool.commitizen]
+tag_format = "v$major.$minor.$patch"
