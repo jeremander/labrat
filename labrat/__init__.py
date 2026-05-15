@@ -1,8 +1,9 @@
-import colorlog
 from functools import cache
 import logging
 from logging import Logger
 from typing import Any, Dict
+
+import colorlog
 
 
 #########

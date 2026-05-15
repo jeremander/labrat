@@ -3,14 +3,14 @@ import bdb
 from copy import copy
 from dataclasses import MISSING, dataclass, make_dataclass
 from datetime import datetime
-from functools import cache, partial
+from functools import cache, partial, reduce
 from logging import Logger
 import multiprocessing as mp
 import random
-from typing import Dict, Generic, Iterator, Optional, Tuple, TypeVar
+from typing import Generic, Iterator, Optional, TypedDict, TypeVar, Union
 
 from fancy_dataclass.sql import DEFAULT_REGISTRY, ColumnMap, SQLDataclass, register
-from sqlalchemy import Column, DateTime, Integer, String
+from sqlalchemy import Column, DateTime, Integer, String, and_
 from sqlalchemy.future.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 from tqdm import tqdm
@@ -24,7 +24,8 @@ T = TypeVar('T')
 class Result(SQLDataclass):
     """A class of experimental result that can be mapped to a SQL table."""
 
-R = TypeVar('R', bound = Result)
+R = TypeVar('R', bound=Result)
+
 
 class Experiment(SQLDataclass, Generic[R], ABC):
     @classmethod
@@ -63,40 +64,62 @@ class Experiment(SQLDataclass, Generic[R], ABC):
         dcl = make_dataclass(cls.__name__, flds, bases = (SQLDataclass,))
         return register(extra_cols = cls.extra_columns())(dcl)
     @abstractmethod
-    def run(self) -> R:
-        """Runs the experiment, producing a Result."""
+    def run(self) -> Union[R, list[R]]:
+        """Runs the experiment, producing a Result or a list of Results."""
 
-def run_experiment(experiment: Experiment, errors: str = 'raise') -> Optional[Tuple[type[Experiment], JSONDict]]:  # type: ignore
+class ExperimentResults(TypedDict):
+    """Bundle of data returned by an experiment run."""
+    experiment_cls: type[Experiment]
+    experiment_data: JSONDict
+    time: datetime
+    results: list[JSONDict]
+
+def run_experiment(experiment: Experiment, errors: str = 'raise', verbosity: int = 0, debug: bool = False) -> Optional[ExperimentResults]:  # type: ignore
     """Runs a single experiment."""
+    if (verbosity >= 2):
+        LOGGER.info(str(experiment))
+    experiment_data = experiment.to_dict()
     try:
         result = experiment.run()
-        return (experiment.__class__, {'time' : datetime.now(), **experiment.to_dict(), **result.to_dict()})
+        if isinstance(result, list):
+            results = [res.to_dict() for res in result]
+        else:  # single result
+            results = [result.to_dict()]
+        exp_results: ExperimentResults = {
+            'experiment_cls': experiment.__class__,
+            'time': datetime.now(),
+            'experiment_data': experiment_data,
+            'results': results,
+        }
+        return exp_results
     except Exception as e:
         if isinstance(e, (KeyboardInterrupt, bdb.BdbQuit)):
             raise e
         if (errors == 'raise'):
             raise e
         if (errors == 'warn'):
-            experiment.logger.error(f'{e.__class__.__name__}: {e}')
+            experiment.logger.error(f'{e.__class__.__name__}:\n\t{experiment_data}\n\tERROR: {e}')
             return None
 
 @dataclass
 class ExperimentRunner:
     """Main driver for running experiments."""
-    params: Dict[type[Experiment], Params]  # mapping from experiment class to parameters
+    params: dict[type[Experiment], Params]  # mapping from experiment class to parameters
     engine: Engine  # SQL engine
     verbosity: int = 0  # verbosity level
     errors: str = 'warn'  # how to handle errors (ignore, warn, raise)
     num_threads: int = 1  # number of threads to use
     chunk_size: int = 1  # number of experiments per chunk
     shuffle: bool = False  # shuffle the experiments
+    no_rerun: bool = False  # do not re-run the same experiment if already in the database
+    debug: bool = False  # drop into debugger if an error occurs (single-threaded only)
     def __post_init__(self) -> None:
         # ensure params are wrapped in the Params class
         self.params = {cls : Params(params) for (cls, params) in self.params.items()}
     def __iter__(self) -> Iterator[Experiment]:
         for (cls, params) in self.params.items():
             yield from (cls.from_dict(d) for d in params)
-    def result_classes(self) -> Dict[type[Experiment], type[SQLDataclass]]:
+    def result_classes(self) -> dict[type[Experiment], type[SQLDataclass]]:
         """Gets a mapping from Experiment classes to SQLDataclasses storing both parameters and results."""
         return {cls : cls.sql_cls() for cls in self.params}
     def create_tables(self) -> None:
@@ -113,24 +136,42 @@ class ExperimentRunner:
         self.create_tables()
         session = self.make_session()
         experiments = list(self)
+        LOGGER.info(f'Parameters specify {len(experiments):,d} experiments.')
+        if self.no_rerun:
+            LOGGER.info('Filtering out already-run experiments.')
+            # filter out experiments already in the database
+            def is_new_experiment(experiment: Experiment) -> bool:
+                sql_cls = experiment.sql_cls()
+                flt = reduce(and_, (getattr(sql_cls, field) == getattr(experiment, field) for field in experiment.__dataclass_fields__))
+                rows = session.query(sql_cls).filter(flt)
+                try:
+                    _ = next(iter(rows))
+                    return False
+                except StopIteration:
+                    return True
+            experiments = list(filter(is_new_experiment, experiments))
         if self.shuffle:
             random.shuffle(experiments)
         num_experiments = len(experiments)
-        LOGGER.info(f'Running {num_experiments} experiments with {self.num_threads} thread(s)...')
+        LOGGER.info(f'Running {num_experiments:,d} experiments with {self.num_threads} thread(s)...')
         pool = mp.Pool(self.num_threads)
         mapper = map if (self.num_threads == 1) else partial(pool.imap_unordered, chunksize = self.chunk_size)
-        func = partial(run_experiment, errors = self.errors)
-        results = mapper(func, experiments)  # type: ignore
+        func = partial(run_experiment, errors = self.errors, verbosity = self.verbosity, debug = self.debug and (self.num_threads == 1))
+        all_results = mapper(func, experiments)  # type: ignore
         exp_id = datetime.now().strftime('%Y%m%d%H%M%S')
         result_classes = self.result_classes()
-        for result in tqdm(results, total = num_experiments):
-            if (result is not None):
-                (cls, d) = result
-                time = d.pop('time')
-                res = result_classes[cls].from_dict(d)  # automatically infers subtype
-                res.exp_id = exp_id
-                res.time = time
-                session.add(res)
-                session.commit()
-        LOGGER.info('\033[1mDONE!')
-
+        for results in tqdm(all_results, total = num_experiments):
+            if (results is not None):
+                experiment_cls = results['experiment_cls']
+                result_cls = result_classes[experiment_cls]
+                time = results['time']
+                experiment_data = results['experiment_data']
+                for result in results['results']:
+                    # combine experiment and result data into a single entry
+                    result_dict = {**experiment_data, **result}
+                    res = result_cls.from_dict(result_dict)  # automatically infers subtype
+                    res.exp_id = exp_id
+                    res.time = time
+                    session.add(res)
+                    session.commit()
+        LOGGER.info('\033[1m' + 'DONE!')

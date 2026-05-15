@@ -1,6 +1,7 @@
 from dataclasses import dataclass
-from sqlalchemy import create_engine
 import time
+
+from sqlalchemy import create_engine
 
 from labrat.experiment import Experiment, ExperimentRunner, Result
 from labrat.params import Params
@@ -18,7 +19,7 @@ class Experiment1(Experiment[MyResult]):
     c: float
     def run(self) -> MyResult:
         time.sleep(0.1)
-        if (self.a == 13):
+        if self.a == 13:
             raise ValueError('13 is unlucky!')
         return MyResult(self.a, self.b == 'b')
 
@@ -38,5 +39,5 @@ if __name__ == '__main__':
     params2 = Params({'x' : ['abc', 'def'], 'y' : [1, 2]})
     params = {Experiment1 : params1, Experiment2 : params2}
 
-    runner = ExperimentRunner(params, engine, num_threads = 4)
+    runner = ExperimentRunner(params, engine, num_threads=4)
     runner.run()

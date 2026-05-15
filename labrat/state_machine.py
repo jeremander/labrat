@@ -1,12 +1,16 @@
 from abc import ABC, abstractmethod, abstractproperty
 from dataclasses import dataclass
-from fancy_dataclass import SQLDataclass
 from typing import Generic, Iterator, TypeVar
+
+from fancy_dataclass import SQLDataclass
 
 from labrat.experiment import Experiment, Result
 
+
+# state type
 S = TypeVar('S')  # state
-I = TypeVar('I')  # input
+# input type
+I = TypeVar('I')  # noqa: E741
 R = TypeVar('R', bound = Result)  # result
 T = TypeVar('T')
 
@@ -21,7 +25,7 @@ class StateMachine(ABC, SQLDataclass, Generic[S, I]):
     def is_final(self, state: S) -> bool:
         """Returns True if the given state is a final state."""
     @abstractmethod
-    def transition(self, state: S, input: I) -> S:
+    def transition(self, state: S, input: I) -> S:  # noqa: A002
         """Transitions from one state to another, given input."""
 
 @dataclass  # type: ignore
