@@ -16,10 +16,10 @@ classifiers = [
   "Programming Language :: Python"
 ]
 dependencies = [
-    "colorlog",
-    "fancy_dataclass",
-    "sqlalchemy",
-    "toml",
+  "colorlog",
+  "fancy_dataclass",
+  "sqlalchemy",
+  "toml",
 ]
 
 [tool.hatch.metadata]
@@ -30,6 +30,22 @@ include = ["/labrat"]
 
 [tool.hatch.version]
 path = "labrat/__init__.py"
+
+[tool.hatch.envs.lint]
+dependencies = [
+  "mypy>=1.20",
+  "ruff>=0.15",
+  "vermin>=1.8",
+]
+
+[tool.hatch.envs.lint.scripts]
+# linting
+run-ruff = "ruff check {args:labrat tests}"
+# ensure Python version compatibility
+run-vermin = "vermin {args:.}"
+# type-checking
+run-mypy = "mypy --install-types --non-interactive {args:labrat tests}"
+all = ["run-ruff", "run-vermin", "run-mypy"]
 
 [tool.commitizen]
 tag_format = "v$major.$minor.$patch"
