@@ -6,6 +6,9 @@ from typing import Any, Dict
 import colorlog
 
 
+__version__ = '0.2.0'
+
+
 #########
 # TYPES #
 #########
