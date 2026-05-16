@@ -1,7 +1,7 @@
 from functools import cache
 import logging
 from logging import Logger
-from typing import Any, Dict
+from typing import Any
 
 import colorlog
 
@@ -13,7 +13,7 @@ __version__ = '0.2.0'
 # TYPES #
 #########
 
-JSONDict = Dict[str, Any]
+JSONDict = dict[str, Any]
 
 
 ###########
@@ -32,12 +32,13 @@ def get_logger(name: str) -> Logger:
         'ERROR' : 'red',
         'CRITICAL' : 'red,bg_white'
     }
-    formatter = colorlog.ColoredFormatter(fmt, log_colors = log_colors)
+    formatter = colorlog.ColoredFormatter(fmt, log_colors=log_colors)
     handler.setFormatter(formatter)
     logger = colorlog.getLogger(name)
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
     return logger
+
 
 # global logger
 LOGGER = get_logger('labrat')
