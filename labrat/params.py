@@ -7,7 +7,7 @@ from functools import reduce
 import itertools
 from math import prod
 import operator
-from typing import Any
+from typing import Any, cast
 
 from typing_extensions import Self
 
@@ -61,11 +61,22 @@ class Params(Iterable[JSONDict], Sized):
         """Given a dict from parameter names to value lists, constructs a parameter grid."""
         return cls.product(*[SingleParamGrid(key, vals) for (key, vals) in grid.items()])
 
+    def with_trials(self, num_trials: int) -> ParamProduct:
+        """Given a number of trials, returns a new Params object which includes a "trial" parameter whose values
+        are indices ranging from 0 to (num_trials - 1)."""
+        return cast(ParamProduct, self * SingleParamGrid('trial', range(num_trials)))
+
     def __mul__(self, other: Self) -> Params:
         return type(self).product(self, other)
 
+    def __rmul__(self, other: Self) -> Params:
+        return type(other).product(other, self)
+
     def __add__(self, other: Self) -> Params:
         return type(self).union(self, other)
+
+    def __radd__(self, other: Self) -> Params:
+        return type(other).union(other, self)
 
 
 @dataclass
@@ -88,7 +99,7 @@ class ParamList(Params):
 class SingleParamGrid(Params):
     """A collection of values for a single parameter."""
     key: str
-    values: list[Any]
+    values: Sequence[Any]
 
     def __post_init__(self) -> None:
         if not isinstance(self.key, str):
@@ -122,7 +133,7 @@ class ParamProduct(Params):
             for key in ps.keys:
                 if key in keys:
                     raise ValueError(
-                        f'cannot make Cartesian product of Params with overlapping key {key!r}'
+                        f'cannot make a product of Params with overlapping key {key!r}'
                     )
                 keys.add(key)
 

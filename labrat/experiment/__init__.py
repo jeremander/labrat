@@ -58,7 +58,7 @@ class ExperimentResult(Generic[R]):
 
 
 @dataclass
-class Experiment(JSONDataclass, Generic[R], ABC, store_type='off'):
+class Experiment(JSONDataclass, Generic[R], ABC, store_type='off', allow_extra_fields=False):
     """A type representing some kind of computational experiment.
 
     The type itself corresponds to a SQL table.
