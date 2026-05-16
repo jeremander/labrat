@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "labrat"
 dynamic = ["version"]
-description = "A framework for running experiments in parallel."
+description = "A framework for running computational experiments: hyperparameter sweeps, Monte Carlo, financial backtesting, and more."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
@@ -19,6 +19,7 @@ dependencies = [
   "colorlog",
   "fancy_dataclass",
   "sqlalchemy",
+  "tqdm",
   "typing_extensions",
 ]
 

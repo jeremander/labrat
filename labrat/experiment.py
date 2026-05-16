@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import bdb
 from collections.abc import Iterator
 from copy import copy
-from dataclasses import MISSING, dataclass, make_dataclass
+from dataclasses import MISSING, dataclass, fields, make_dataclass
 from datetime import datetime
 from functools import cache, partial, reduce
 from logging import Logger
@@ -137,10 +137,6 @@ class ExperimentRunner(Generic[R]):
     no_rerun: bool = False  # do not re-run the same experiment if already in the database
     debug: bool = False  # drop into debugger if an error occurs (single-threaded only)
 
-    def __post_init__(self) -> None:
-        # ensure params are wrapped in the Params class
-        self.params = {cls : Params(params) for (cls, params) in self.params.items()}
-
     def __iter__(self) -> Iterator[Experiment[R]]:
         for (cls, params) in self.params.items():
             yield from (cls.from_dict(d) for d in params)
@@ -174,8 +170,8 @@ class ExperimentRunner(Generic[R]):
                 flt = reduce(
                     and_,
                     (
-                        getattr(result_entry_cls, field) == getattr(experiment, field)
-                        for field in experiment.__dataclass_fields__
+                        getattr(result_entry_cls, field.name) == getattr(experiment, field.name)
+                        for field in fields(experiment)
                     )
                 )
                 rows = session.query(result_entry_cls).filter(flt)
@@ -201,7 +197,7 @@ class ExperimentRunner(Generic[R]):
         # TODO: use milliseconds?
         experiment_id = datetime.now().strftime('%Y%m%d%H%M%S')
         result_entry_classes = self.result_entry_types()
-        for results in tqdm(all_results, total = num_experiments):
+        for results in tqdm(all_results, total=num_experiments):
             if results is not None:
                 experiment_cls = results['experiment_cls']
                 result_entry_cls = result_entry_classes[experiment_cls]
