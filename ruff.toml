@@ -41,9 +41,7 @@ ignore = [
     "D213",  # multi-line summary start on second line
     "D401",  # docstrings in imperative mood
     "E501",  # line length
-    "UP006",  # deprecated collection types in annotations
     "UP007",  # | instead of Union
-    "UP035",  # import replacements (collections.abc)
     "UP045",  # | None instead of Optional
 ]
 

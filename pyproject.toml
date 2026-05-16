@@ -7,7 +7,7 @@ name = "labrat"
 dynamic = ["version"]
 description = "A framework for running experiments in parallel."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {file = "LICENSE"}
 authors = [
   { name = "Jeremy Silver", email = "jeremys@nessiness.com" }
@@ -35,6 +35,7 @@ path = "labrat/__init__.py"
 dependencies = [
   "mypy>=1.20",
   "ruff>=0.15",
+  "types-tqdm",
   "vermin>=1.8",
 ]
 
@@ -49,3 +50,13 @@ all = ["run-ruff", "run-vermin", "run-mypy"]
 
 [tool.commitizen]
 tag_format = "v$major.$minor.$patch"
+
+[tool.mypy]
+# exclude = ["tmp.*"]
+warn_unused_configs = true
+strict = true
+
+# [[tool.mypy.overrides]]
+# module = "tests.*"
+# strict = false
+# disable_error_code = ["arg-type", "attr-defined", "import-not-found", "index", "no-untyped-call", "no-untyped-def", "operator", "var-annotated"]
