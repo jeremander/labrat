@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from collections.abc import Iterable, Iterator, Sequence, Sized
 from dataclasses import dataclass
-from functools import partial, reduce
+from functools import reduce
 import itertools
 from math import prod
 import operator
@@ -134,10 +134,7 @@ class ParamProduct(Params):
         return prod(map(len, self.params))
 
     def __iter__(self) -> Iterator[JSONDict]:
-        return map(
-            partial(reduce, operator.or_, initial={}),
-            itertools.product(*self.params),
-        )
+        return (reduce(operator.or_, ps, {}) for ps in itertools.product(*self.params))
 
 
 @dataclass

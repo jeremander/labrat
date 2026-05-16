@@ -1,18 +1,19 @@
 from abc import ABC, abstractmethod
 import bdb
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sized
+from contextlib import suppress
 from copy import copy
-from dataclasses import MISSING, dataclass, fields, make_dataclass
+from dataclasses import MISSING, dataclass, fields, is_dataclass, make_dataclass
 from datetime import datetime
-from functools import cache, partial, reduce
+from functools import cache, cached_property, partial, reduce
 from logging import Logger
 import multiprocessing as mp
 import random
-from typing import Any, Generic, Optional, TypedDict, TypeVar, cast, get_args, get_origin
+from typing import Any, Generic, Literal, Optional, TypeAlias, TypeVar, cast, get_args, get_origin
 
-from fancy_dataclass import JSONBaseDataclass
+from fancy_dataclass import JSONDataclass
 from fancy_dataclass.sql import DEFAULT_REGISTRY, SQLDataclass, register
-from sqlalchemy import Column, DateTime, Integer, String, and_
+from sqlalchemy import Column, Integer, and_
 from sqlalchemy.future.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 from tqdm import tqdm
@@ -23,22 +24,28 @@ from labrat.params import Params
 
 T = TypeVar('T')
 
+# how to handle errors in experiments
+ErrorMode: TypeAlias = Literal['ignore', 'warn', 'raise']
 
-class Result(JSONBaseDataclass):
+
+class Result(JSONDataclass, store_type='off'):
     """A class for experimental results, where the fields can be mapped to a SQL table."""
 
 
 R = TypeVar('R', bound=Result)
 
 
-class ResultEntry(SQLDataclass, JSONBaseDataclass):  # type: ignore[misc]
+class ResultEntry(SQLDataclass, JSONDataclass, store_type='off'):  # type: ignore[misc]
     """A record containing info about an experiment and a single result."""
     experiment_id: str
     time: datetime
 
 
 @dataclass
-class Experiment(JSONBaseDataclass, Generic[R], ABC):
+class Experiment(JSONDataclass, Generic[R], ABC, store_type='off'):
+    """A type representing some kind of computational experiment.
+
+    An instance of an Experiment represents a particular choice of parameters."""
 
     @classmethod
     def logger(cls) -> Logger:
@@ -46,7 +53,7 @@ class Experiment(JSONBaseDataclass, Generic[R], ABC):
         return get_logger(cls.__name__)
 
     @classmethod
-    def result_cls(cls) -> type[R]:
+    def result_type(cls) -> type[R]:
         """Gets the Result subclass.
         Infers this from the parameter R of the Experiment[R] class from which this subclass should inherit."""
         for base in cls.__orig_bases__:  # type: ignore[attr-defined]
@@ -57,19 +64,16 @@ class Experiment(JSONBaseDataclass, Generic[R], ABC):
     @classmethod
     def extra_columns(cls) -> dict[str, Column[Any]]:
         """Gets additional columns to provide to the SQL table which are not included among the dataclass fields."""
-        return {
-            'id': Column('id', Integer, primary_key=True, autoincrement=True),
-            'experiment_id': Column('experiment_id', String),
-            'time': Column('time', DateTime)
-        }
+        return {}
 
     @classmethod
     @cache
     def result_entry_type(cls) -> type[ResultEntry]:
-        """Creates a custom subclass of ExperimentAndResult that has a sqlalchemy-backed SQL table."""
+        """Creates a custom subclass of ResultEntry that has a sqlalchemy-backed SQL table."""
         flds = []
-        for cl in [cls, cls.result_cls()]:
-            for fld in cl.get_fields():  # type: ignore
+        for cl in [cls, cls.result_type()]:
+            assert is_dataclass(cl)
+            for fld in fields(cl):
                 has_default = (fld.default is not MISSING) or (fld.default_factory is not MISSING)
                 # to preserve order, put a dummy default of None for any mandatory fields
                 if not has_default:
@@ -77,16 +81,35 @@ class Experiment(JSONBaseDataclass, Generic[R], ABC):
                     field.default = None
                 flds.append((field.name, field.type, field))
         dcls = make_dataclass(cls.__name__, flds, bases=(ResultEntry,))
-        return cast(type[ResultEntry], register(extra_cols=cls.extra_columns())(dcls))
+        extra_cols = {
+            'id': Column('id', Integer, primary_key=True, autoincrement=True),
+            **cls.extra_columns(),
+        }
+        return cast(type[ResultEntry], register(extra_cols=extra_cols)(dcls))
+
+    def is_in_database(self, session: Session) -> bool:
+        """Determines if an Experiment is already in the database for a given Session.
+        This means there is at least one result entry for the experiment."""
+        result_entry_cls = self.result_entry_type()
+        flt = reduce(
+            and_,
+            (getattr(result_entry_cls, field.name) == getattr(self, field.name) for field in fields(self)),
+        )
+        rows = session.query(result_entry_cls).filter(flt)
+        with suppress(StopIteration):
+            _ = next(iter(rows))
+            return True
+        return False
 
     @abstractmethod
     def run(self) -> R | list[R]:
         """Runs the experiment, producing a Result or a list of Results."""
 
 
-class ExperimentResults(TypedDict, Generic[R]):
+@dataclass
+class ExperimentResults(Generic[R]):
     """Bundle of data returned by an experiment run."""
-    experiment_cls: type[Experiment[R]]
+    experiment_type: type[Experiment[R]]
     experiment_data: JSONDict
     time: datetime
     results: list[JSONDict]
@@ -103,34 +126,34 @@ def run_experiment(
         LOGGER.info(str(experiment))
     experiment_data = experiment.to_dict()
     try:
+        # TODO: include both start and end time, derive elapsed
         result = experiment.run()
-        if isinstance(result, list):
-            results = [res.to_dict() for res in result]
-        else:  # single result
-            results = [result.to_dict()]
-        exp_results: ExperimentResults[R] = {
-            'experiment_cls': experiment.__class__,
-            'time': datetime.now(),
-            'experiment_data': experiment_data,
-            'results': results,
-        }
-        return exp_results
+        if not isinstance(result, list):  # single result
+            result = [result]
+        results = [res.to_dict() for res in result]
+        return ExperimentResults(
+            experiment_type=experiment.__class__,
+            time=datetime.now(),
+            experiment_data=experiment_data,
+            results=results,
+        )
     except Exception as e:
         if isinstance(e, (KeyboardInterrupt, bdb.BdbQuit)) or (errors == 'raise'):
             raise
         if errors == 'warn':
             logger = experiment.logger()
             logger.error(f'{type(e).__name__}:\n\t{experiment_data}\n\tERROR: {e}')
+    # TODO: return error info instead of None
     return None
 
 
-@dataclass
-class ExperimentRunner(Generic[R]):
+@dataclass(frozen=True)
+class ExperimentRunner(Iterable[Experiment[R]], Sized):
     """Main driver for running experiments."""
     params: dict[type[Experiment[R]], Params]  # mapping from experiment class to parameters
     engine: Engine  # SQL engine
     verbosity: int = 0  # verbosity level
-    errors: str = 'warn'  # how to handle errors (ignore, warn, raise)
+    errors: ErrorMode = 'warn'  # how to handle errors (ignore, warn, raise)
     num_threads: int = 1  # number of threads to use
     chunk_size: int = 1  # number of experiments per chunk
     shuffle: bool = False  # shuffle the experiments
@@ -141,6 +164,10 @@ class ExperimentRunner(Generic[R]):
         for (cls, params) in self.params.items():
             yield from (cls.from_dict(d) for d in params)
 
+    def __len__(self) -> int:
+        return sum(map(len, self.params.values()))
+
+    @cached_property
     def result_entry_types(self) -> dict[type[Experiment[R]], type[ResultEntry]]:
         """Gets a mapping from Experiment classes to ResultEntry classes which store both parameters and results."""
         return {cls: cls.result_entry_type() for cls in self.params}
@@ -156,33 +183,41 @@ class ExperimentRunner(Generic[R]):
         """Creates a new SQLAlchemy session."""
         return sessionmaker(bind=self.engine)()
 
+    def _get_experiments(self, session: Session) -> list[Experiment[R]]:
+        experiments = list(self)
+        num_experiments = len(self)
+        LOGGER.info(f'Parameters specify {num_experiments:,d} experiments.')
+        if self.no_rerun:
+            LOGGER.info('Filtering out already-run experiments.')
+            # filter out experiments already in the database
+            experiments = [experiment for experiment in experiments if not experiment.is_in_database(session)]
+            num_filtered_experiments = len(experiments)
+            if num_filtered_experiments < num_experiments:
+                LOGGER.info(f'Filtered to {num_filtered_experiments} experiments.')
+        if self.shuffle:
+            # TODO: random seed for shuffling?
+            random.shuffle(experiments)
+        return experiments
+
+    def _process_results(self, session: Session, experiment_id: str, results: ExperimentResults[R]) -> None:
+        experiment_type = results.experiment_type
+        result_entry_type = self.result_entry_types[experiment_type]
+        time = results.time
+        experiment_data = results.experiment_data
+        for result in results.results:
+            # combine experiment and result data into a single entry
+            result_dict = {**experiment_data, **result}
+            entry = result_entry_type.from_dict(result_dict)  # automatically infers subtype
+            entry.experiment_id = experiment_id
+            entry.time = time
+            session.add(entry)
+            session.commit()
+
     def run(self) -> None:
         """Runs all experiments."""
         self.create_tables()
         session = self.make_session()
-        experiments = list(self)
-        LOGGER.info(f'Parameters specify {len(experiments):,d} experiments.')
-        if self.no_rerun:
-            LOGGER.info('Filtering out already-run experiments.')
-            # filter out experiments already in the database
-            def is_new_experiment(experiment: Experiment[R]) -> bool:
-                result_entry_cls = experiment.result_entry_type()
-                flt = reduce(
-                    and_,
-                    (
-                        getattr(result_entry_cls, field.name) == getattr(experiment, field.name)
-                        for field in fields(experiment)
-                    )
-                )
-                rows = session.query(result_entry_cls).filter(flt)
-                try:
-                    _ = next(iter(rows))
-                    return False
-                except StopIteration:
-                    return True
-            experiments = list(filter(is_new_experiment, experiments))
-        if self.shuffle:
-            random.shuffle(experiments)
+        experiments = self._get_experiments(session)
         num_experiments = len(experiments)
         LOGGER.info(f'Running {num_experiments:,d} experiments with {self.num_threads} thread(s)...')
         pool = mp.Pool(self.num_threads)
@@ -193,22 +228,10 @@ class ExperimentRunner(Generic[R]):
             mapper = partial(pool.imap_unordered, chunksize=self.chunk_size)
             debug = False
         func = partial(run_experiment, errors=self.errors, verbosity=self.verbosity, debug=debug)
-        all_results = mapper(func, experiments)
+        all_results: Iterable[ExperimentResults[R]] = mapper(func, experiments)
         # TODO: use milliseconds?
         experiment_id = datetime.now().strftime('%Y%m%d%H%M%S')
-        result_entry_classes = self.result_entry_types()
         for results in tqdm(all_results, total=num_experiments):
             if results is not None:
-                experiment_cls = results['experiment_cls']
-                result_entry_cls = result_entry_classes[experiment_cls]
-                time = results['time']
-                experiment_data = results['experiment_data']
-                for result in results['results']:
-                    # combine experiment and result data into a single entry
-                    result_dict = {**experiment_data, **result}
-                    entry = result_entry_cls.from_dict(result_dict)  # automatically infers subtype
-                    entry.experiment_id = experiment_id
-                    entry.time = time
-                    session.add(entry)
-                    session.commit()
+                self._process_results(session, experiment_id, results)
         LOGGER.info('\033[1m' + 'DONE!')
