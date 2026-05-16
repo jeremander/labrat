@@ -15,7 +15,7 @@ from typing import Any, Generic, Literal, Optional, TypeAlias, TypeVar, cast, ge
 
 from fancy_dataclass import JSONDataclass
 from fancy_dataclass.sql import DEFAULT_REGISTRY, SQLDataclass, register
-from sqlalchemy import Column, Integer, and_
+from sqlalchemy import Column, Integer, and_, create_engine
 from sqlalchemy.future.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 from tqdm import tqdm
@@ -126,7 +126,7 @@ class Experiment(JSONDataclass, Generic[R], ABC, store_type='off'):
 
     def get_results(
         self,
-        errors: ErrorMode = 'raise',
+        error_mode: ErrorMode = 'raise',
         verbosity: int = 0,
         debug: bool = False,
     ) -> Optional[ExperimentResult[R]]:
@@ -143,9 +143,9 @@ class Experiment(JSONDataclass, Generic[R], ABC, store_type='off'):
                 result=result,
             )
         except Exception as e:
-            if isinstance(e, (KeyboardInterrupt, bdb.BdbQuit)) or (errors == 'raise'):
+            if isinstance(e, (KeyboardInterrupt, bdb.BdbQuit)) or (error_mode == 'raise'):
                 raise
-            if errors == 'warn':
+            if error_mode == 'warn':
                 logger = self.logger()
                 logger.error(f'{type(e).__name__}:\n\t{self}\n\tERROR: {e}')
         # TODO: wrap error info into some object, instead of returning None
@@ -156,14 +156,21 @@ class Experiment(JSONDataclass, Generic[R], ABC, store_type='off'):
 class ExperimentRunner(Iterable[Experiment[R]], Sized):
     """Main driver for running experiments."""
     params: dict[type[Experiment[R]], Params]  # mapping from experiment class to parameters
-    engine: Engine  # SQL engine
+    engine: str | Engine  # SQL engine
     verbosity: int = 0  # verbosity level
-    errors: ErrorMode = 'warn'  # how to handle errors (ignore, warn, raise)
+    error_mode: ErrorMode = 'warn'  # how to handle errors (ignore, warn, raise)
     num_threads: int = 1  # number of threads to use
     chunk_size: int = 1  # number of experiments per chunk
     shuffle: bool = False  # shuffle the experiments
     no_rerun: bool = False  # do not re-run the same experiment if already in the database
     debug: bool = False  # drop into debugger if an error occurs (single-threaded only)
+
+    @cached_property
+    def _engine(self) -> Engine:
+        """Gets the sqlalchemy Engine storing the result data for all experiments."""
+        if isinstance(self.engine, str):
+            return create_engine(self.engine)
+        return self.engine
 
     def __iter__(self) -> Iterator[Experiment[R]]:
         for (cls, params) in self.params.items():
@@ -182,11 +189,11 @@ class ExperimentRunner(Iterable[Experiment[R]], Sized):
         # create all the tables
         for cls in self.params:
             _ = cls.result_entry_type()
-        DEFAULT_REGISTRY.metadata.create_all(self.engine)
+        DEFAULT_REGISTRY.metadata.create_all(self._engine)
 
     def make_session(self) -> Session:
         """Creates a new SQLAlchemy session."""
-        return sessionmaker(bind=self.engine)()
+        return sessionmaker(bind=self._engine)()
 
     def _get_experiments(self, session: Session) -> list[Experiment[R]]:
         experiments = list(self)
@@ -232,7 +239,7 @@ class ExperimentRunner(Iterable[Experiment[R]], Sized):
         else:
             mapper = partial(pool.imap_unordered, chunksize=self.chunk_size)
             debug = False
-        func = partial(Experiment.get_results, errors=self.errors, verbosity=self.verbosity, debug=debug)
+        func = partial(Experiment.get_results, error_mode=self.error_mode, verbosity=self.verbosity, debug=debug)
         all_results: Iterable[ExperimentResult[R]] = mapper(func, experiments)
         # TODO: use milliseconds? Use a hash of the experiment data instead?
         # TODO: call this runner_id instead?
