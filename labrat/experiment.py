@@ -20,7 +20,7 @@ from sqlalchemy.future.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 from tqdm import tqdm
 
-from labrat import LOGGER, JSONDict, get_logger
+from labrat import LOGGER, get_logger
 from labrat.params import Params
 
 
@@ -40,24 +40,31 @@ R = TypeVar('R', bound=Result)
 class ResultEntry(SQLDataclass, JSONDataclass, store_type='off'):  # type: ignore[misc]
     """A record containing info about an experiment and a single result."""
     experiment_id: str
-    time: datetime
+    start_time: datetime
+    end_time: datetime
 
 
-@dataclass
-class ExperimentResults(Generic[R]):
+@dataclass(frozen=True)
+class ExperimentResult(Generic[R]):
     """Bundle of data returned when running an experiment."""
-    # TODO: avoid storing dicts (store objects themselves), and only one result?
-    experiment_type: type[Experiment[R]]
-    experiment_data: JSONDict
-    time: datetime
-    results: list[JSONDict]
+    # experiment that was run
+    experiment: Experiment[R]
+    # time the experiment was started
+    start_time: datetime
+    # time the experiment was completed
+    end_time: datetime
+    # result of the experiment
+    result: R
 
 
 @dataclass
 class Experiment(JSONDataclass, Generic[R], ABC, store_type='off'):
     """A type representing some kind of computational experiment.
 
-    An instance of an Experiment represents a particular choice of parameters."""
+    The type itself corresponds to a SQL table.
+
+    An instance of an Experiment represents an experimental trial with one particular choice of parameters.
+    The result will be stored in the type's SQL table."""
 
     @classmethod
     def logger(cls) -> Logger:
@@ -114,38 +121,34 @@ class Experiment(JSONDataclass, Generic[R], ABC, store_type='off'):
         return False
 
     @abstractmethod
-    def run(self) -> R | list[R]:
-        """Runs the experiment, producing a Result or a list of Results."""
+    def run(self) -> R:
+        """Runs the experiment, returning a result of type R."""
 
     def get_results(
         self,
         errors: ErrorMode = 'raise',
         verbosity: int = 0,
         debug: bool = False,
-    ) -> Optional[ExperimentResults[R]]:
-        """Runs the experiment, producing an ExperimentResults object."""
+    ) -> Optional[ExperimentResult[R]]:
+        """Runs the experiment, returning an ExperimentResult object."""
         if verbosity >= 2:
             LOGGER.info(str(self))
-        experiment_data = self.to_dict()
         try:
-            # TODO: include both start and end time, derive elapsed
+            start_time = datetime.now()
             result = self.run()
-            if not isinstance(result, list):  # single result
-                result = [result]
-            results = [res.to_dict() for res in result]
-            return ExperimentResults(
-                experiment_type=self.__class__,
-                time=datetime.now(),
-                experiment_data=experiment_data,
-                results=results,
+            return ExperimentResult(
+                experiment=self,
+                start_time=start_time,
+                end_time=datetime.now(),
+                result=result,
             )
         except Exception as e:
             if isinstance(e, (KeyboardInterrupt, bdb.BdbQuit)) or (errors == 'raise'):
                 raise
             if errors == 'warn':
                 logger = self.logger()
-                logger.error(f'{type(e).__name__}:\n\t{experiment_data}\n\tERROR: {e}')
-        # TODO: return error info instead of None
+                logger.error(f'{type(e).__name__}:\n\t{self}\n\tERROR: {e}')
+        # TODO: wrap error info into some object, instead of returning None
         return None
 
 
@@ -201,20 +204,18 @@ class ExperimentRunner(Iterable[Experiment[R]], Sized):
             random.shuffle(experiments)
         return experiments
 
-    def _process_experiment_results(self, session: Session, experiment_id: str, results: ExperimentResults[R]) -> None:
+    def _process_experiment_result(self, session: Session, experiment_id: str, result: ExperimentResult[R]) -> None:
         """Processes the results of a single experiment."""
-        experiment_type = results.experiment_type
+        experiment_type = type(result.experiment)
         result_entry_type = self.result_entry_types[experiment_type]
-        time = results.time
-        experiment_data = results.experiment_data
-        for result in results.results:
-            # combine experiment and result data into a single entry
-            result_dict = {**experiment_data, **result}
-            entry = result_entry_type.from_dict(result_dict)  # automatically infers subtype
-            entry.experiment_id = experiment_id
-            entry.time = time
-            session.add(entry)
-            session.commit()
+        # combine experiment and result data into a single table entry
+        result_dict = {**result.experiment.to_dict(), **result.result.to_dict()}
+        entry = result_entry_type.from_dict(result_dict)  # automatically infers subtype
+        entry.experiment_id = experiment_id
+        entry.start_time = result.start_time
+        entry.end_time = result.end_time
+        session.add(entry)
+        session.commit()
 
     def run(self) -> None:
         """Runs all experiments."""
@@ -223,6 +224,7 @@ class ExperimentRunner(Iterable[Experiment[R]], Sized):
         experiments = self._get_experiments(session)
         num_experiments = len(experiments)
         LOGGER.info(f'Running {num_experiments:,d} experiments with {self.num_threads} thread(s)...')
+        # TODO: refactor this into parallel_map utility function (including tqdm wrapper)
         pool = mp.Pool(self.num_threads)
         if self.num_threads == 1:
             mapper: Any = map
@@ -231,10 +233,11 @@ class ExperimentRunner(Iterable[Experiment[R]], Sized):
             mapper = partial(pool.imap_unordered, chunksize=self.chunk_size)
             debug = False
         func = partial(Experiment.get_results, errors=self.errors, verbosity=self.verbosity, debug=debug)
-        all_results: Iterable[ExperimentResults[R]] = mapper(func, experiments)
-        # TODO: use milliseconds?
+        all_results: Iterable[ExperimentResult[R]] = mapper(func, experiments)
+        # TODO: use milliseconds? Use a hash of the experiment data instead?
+        # TODO: call this runner_id instead?
         experiment_id = datetime.now().strftime('%Y%m%d%H%M%S')
-        for results in tqdm(all_results, total=num_experiments):
-            if results is not None:
-                self._process_experiment_results(session, experiment_id, results)
+        for result in tqdm(all_results, total=num_experiments):
+            if result is not None:
+                self._process_experiment_result(session, experiment_id, result)
         LOGGER.info('\033[1m' + 'DONE!')
