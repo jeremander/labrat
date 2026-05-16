@@ -12,17 +12,20 @@ from labrat import JSONDict
 
 @dataclass
 class ParamGrid(Iterable[JSONDict]):
-    """Class representing a collection of experimental parameters, each one given by a JSON dict.
-    This stores a dict mapping from keys to lists of values; this represents the Cartesian product of parameters for
-    each key."""
+    """Class representing a collection of experimental parameters, each one given by a dict of (parameter, value) pairs.
+    The grid stores a dict mapping from parameter names to lists of values; this represents the Cartesian product of
+    values for each parameter."""
     grid: dict[str, list[Any]]
 
     def __init__(self, grid: dict[str, list[Any]]) -> None:
         # validate
-        assert isinstance(grid, dict), 'ParamGrid entry must be a dict'
+        if not isinstance(grid, dict):
+            raise ValueError('ParamGrid entry must be a dict')
         for (key, val) in grid.items():
-            assert isinstance(key, str), 'ParamGrid keys must be strings'
-            assert isinstance(val, Sequence), 'ParamGrid values must be lists'
+            if not isinstance(key, str):
+                raise ValueError('ParamGrid keys must be strings')
+            if not isinstance(val, Sequence):
+                raise ValueError('ParamGrid values must be sequences')
         self.grid = grid
 
     def __iter__(self) -> Iterator[JSONDict]:
@@ -31,27 +34,31 @@ class ParamGrid(Iterable[JSONDict]):
             yield dict(zip(keys, vals))
 
     @classmethod
-    def constant(cls, params: JSONDict) -> 'ParamGrid':
+    def constant(cls, params: JSONDict) -> Self:
         """Constructor from a single parameter dict (i.e. a trivial Cartesian product)."""
-        return cls({key : [val] for (key, val) in params.items()})
+        return cls({key: [val] for (key, val) in params.items()})
 
     @classmethod
-    def product(cls, *grids: 'ParamGrid') -> 'ParamGrid':
+    def product(cls, *grids: Self) -> Self:
         """Constructs the Cartesian product of multiple ParamGrids, with the resulting dicts merged together.
         Raises a ValueError if any keys overlap."""
-        assert (len(grids) >= 1), 'must have at least one ParamGrid'
+        if not grids:
+            raise ValueError('must have at least one ParamGrid')
         keys = set(grids[0].grid)
         for grid in grids[1:]:
             intersection = list(keys.intersection(grid.grid))
             if intersection:
-                raise ValueError(f'cannot make Cartesian product of ParamGrids with overlapping key {intersection[0]!r}')
+                raise ValueError(
+                    f'cannot make Cartesian product of ParamGrids with overlapping key {intersection[0]!r}'
+                )
             keys.update(grid.grid)
         return cls(reduce(operator.or_, (grid.grid for grid in grids)))
 
-    def __mul__(self, other: 'ParamGrid') -> 'ParamGrid':
+    def __mul__(self, other: Self) -> Self:
         """Returns the Cartesian product of two ParamGrids, with the resulting dicts merged together.
         Raises a ValueError if keys overlap."""
-        return self.__class__.product(self, other)
+        return type(self).product(self, other)
+
 
 @dataclass
 class Params(Iterable[JSONDict]):
@@ -72,13 +79,13 @@ class Params(Iterable[JSONDict]):
     def __iter__(self) -> Iterator[JSONDict]:
         return itertools.chain.from_iterable(iter(grid) for grid in self.grids)
 
-    def __mul__(self, other: 'Params') -> 'Params':
+    def __mul__(self, other: Self) -> Self:
         """Returns the Cartesian product of two Params."""
         if isinstance(other, ParamGrid):
             return self * Params([other])
         return self.__class__([grid1 * grid2 for (grid1, grid2) in itertools.product(self.grids, other.grids)])
 
-    def __add__(self, other: 'Params') -> 'Params':
+    def __add__(self, other: Self) -> Self:
         """Returns the union of two Params."""
         if isinstance(other, ParamGrid):
             return self + Params([other])
