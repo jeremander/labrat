@@ -19,7 +19,6 @@ dependencies = [
   "colorlog",
   "fancy_dataclass",
   "sqlalchemy",
-  "toml",
   "typing_extensions",
 ]
 
