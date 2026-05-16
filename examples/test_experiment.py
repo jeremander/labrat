@@ -35,9 +35,10 @@ class Experiment2(Experiment[MyResult]):
 if __name__ == '__main__':
 
     engine = create_engine('sqlite:///test.sqlite')
-    params1 = Params({'a' : list(range(20)), 'b' : ['a', 'b', 'c'], 'c': [1.0, 10.0]})
-    params2 = Params({'x' : ['abc', 'def'], 'y' : [1, 2]})
-    params: dict[type[Experiment[MyResult]], Params] = {Experiment1 : params1, Experiment2 : params2}
+    params1 = Params.grid({'a' : list(range(20)), 'b' : ['a', 'b', 'c'], 'c': [1.0, 10.0]})
+    params2 = Params.grid({'x' : ['abc', 'def'], 'y' : [1, 2]})
+    params: dict[type[Experiment[MyResult]], Params] = {Experiment1: params1, Experiment2: params2}
 
     runner: ExperimentRunner[MyResult] = ExperimentRunner(params, engine, num_threads=4)
+    # runner: ExperimentRunner[MyResult] = ExperimentRunner(params, engine, num_threads=1)
     runner.run()
