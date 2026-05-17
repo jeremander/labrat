@@ -3,7 +3,6 @@ from datetime import datetime
 from functools import partial
 import random
 from typing import Annotated, Any
-import warnings
 
 from typing_extensions import Doc
 
@@ -56,7 +55,7 @@ class ExperimentRunner:
 
     def __post_init__(self) -> None:
         if self.debug and (self.num_threads > 1):
-            warnings.warn('debug = True will have no effect when num_threads > 1', UserWarning, stacklevel=1)
+            LOGGER.warning('debug=True will have no effect when num_threads>1')
 
     def get_experiments(self) -> list[Experiment[Any]]:
         return [cls.from_dict(d) for (cls, params) in self.params.items() for d in params]
@@ -90,8 +89,8 @@ class ExperimentRunner:
         # if shuffling experiments, no need to return the results in the original order
         ordered = not self.shuffle
         all_results = parallel_map(func, experiments, num_threads=self.num_threads, ordered=ordered, progress=True)
-        # TODO: use milliseconds? Use a hash of the experiment data instead?
         # create ID for the entire session of experiment runs
+        # TODO: use milliseconds? Use a hash of the experiment data instead? uuid7?
         session_id = datetime.now().strftime('%Y%m%d%H%M%S')
         LOGGER.info('Processing results...')
         for result in all_results:

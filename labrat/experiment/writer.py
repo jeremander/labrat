@@ -4,13 +4,15 @@ from contextlib import suppress
 from copy import copy
 from dataclasses import MISSING, Field, dataclass, fields, is_dataclass, make_dataclass
 from functools import cache, cached_property, reduce
-from typing import Any, TypeVar
+from typing import Annotated, Any, TypeVar
 
 from fancy_dataclass.sql import DEFAULT_REGISTRY, SQLDataclass, register
 import sqlalchemy
 from sqlalchemy import Column, Engine, Integer, create_engine
 from sqlalchemy.orm import Session, sessionmaker
+from typing_extensions import Doc
 
+from labrat import LOGGER
 from labrat.experiment._base import Experiment, ExperimentResult, Result
 
 
@@ -78,12 +80,14 @@ class ExperimentResultWriter(ABC):
 
 @dataclass(frozen=True)
 class SQLExperimentResultWriter(ExperimentResultWriter):
-    engine: Engine  # sqlalchemy Engine storing result data for all experiments
-
-    def __init__(self, engine: str | Engine) -> None:
-        if isinstance(engine, str):
-            engine = create_engine(engine)
-        object.__setattr__(self, 'engine', engine)
+    engine: Annotated[
+        Engine,
+        Doc('sqlalchemy Engine storing result data for all experiments'),
+    ]
+    overwrite: Annotated[
+        bool,
+        Doc('overwrite the SQL tables if they already exist'),
+    ] = False
 
     @cached_property
     def session(self) -> Session:
@@ -93,6 +97,9 @@ class SQLExperimentResultWriter(ExperimentResultWriter):
         # creates SQL tables for every experiment
         for experiment_type in experiment_types:
             _ = get_result_entry_type(experiment_type)
+        if self.overwrite:
+            LOGGER.info('Dropping existing experiment tables in database')
+            DEFAULT_REGISTRY.metadata.drop_all(self.engine)
         DEFAULT_REGISTRY.metadata.create_all(self.engine)
         # create the Session object for performing database actions
         _ = self.session
@@ -132,6 +139,8 @@ class SQLExperimentResultWriter(ExperimentResultWriter):
         self.session.commit()
 
 
-def sql_writer(engine: str | Engine) -> SQLExperimentResultWriter:
+def sql_writer(engine: str | Engine, *, overwrite: bool = False) -> SQLExperimentResultWriter:
     """Convenience function for constructing a SQLExperimentResultWriter."""
-    return SQLExperimentResultWriter(engine)
+    if isinstance(engine, str):
+        engine = create_engine(engine)
+    return SQLExperimentResultWriter(engine, overwrite=overwrite)
