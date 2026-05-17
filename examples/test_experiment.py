@@ -38,6 +38,6 @@ if __name__ == '__main__':
     params: dict[type[Experiment[MyResult]], Params] = {Experiment1: params1, Experiment2: params2}
 
     result_writer = sql_writer('sqlite:///test.sqlite')
-    num_threads = 1
-    runner = ExperimentRunner(params, result_writer, num_threads=num_threads, debug=True)
+    num_threads = 4
+    runner = ExperimentRunner(params, result_writer, num_threads=num_threads)
     runner.run()

@@ -10,7 +10,7 @@ from datetime import datetime
 from functools import cache, cached_property, partial, reduce
 from logging import Logger
 import random
-from typing import Any, Generic, Literal, Optional, TypeAlias, TypeVar, cast, get_args, get_origin
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast, get_args, get_origin
 
 from fancy_dataclass import JSONDataclass
 from fancy_dataclass.sql import DEFAULT_REGISTRY, SQLDataclass, register
@@ -53,7 +53,7 @@ class ExperimentResult(Generic[R]):
     # time the experiment was completed
     end_time: datetime
     # result of the experiment
-    result: R
+    result: R | Exception
 
 
 @dataclass
@@ -109,36 +109,35 @@ class Experiment(JSONDataclass, Generic[R], ABC, store_type='off', allow_extra_f
     def run(self) -> R:
         """Runs the experiment, returning a result of type R."""
 
-    def get_results(
+    def get_result(
         self,
         error_mode: ErrorMode = 'raise',
         verbosity: int = 0,
         debug: bool = False,
-    ) -> Optional[ExperimentResult[R]]:
+    ) -> ExperimentResult[R]:
         """Runs the experiment, returning an ExperimentResult object."""
         if verbosity >= 2:
             LOGGER.info(str(self))
         try:
             start_time = datetime.now()
-            result = self.run()
-            return ExperimentResult(
-                experiment=self,
-                start_time=start_time,
-                end_time=datetime.now(),
-                result=result,
-            )
+            result: R | Exception = self.run()
         except Exception as e:
-            if isinstance(e, (KeyboardInterrupt, bdb.BdbQuit)) or (error_mode == 'raise'):
-                raise
             if debug:
                 import pdb  # noqa: T100
                 pdb.post_mortem()
+            if isinstance(e, (KeyboardInterrupt, bdb.BdbQuit)) or (error_mode == 'raise'):
                 raise
             if error_mode == 'warn':
                 logger = self.logger()
                 logger.error(f'{type(e).__name__}:\n\t{self}\n\tERROR: {e}')
-        # TODO: wrap error info into some object, instead of returning None
-        return None
+            # store the exception object itself in the result
+            result = e
+        return ExperimentResult(
+            experiment=self,
+            start_time=start_time,
+            end_time=datetime.now(),
+            result=result,
+        )
 
 
 class ExperimentResultWriter(ABC):
@@ -194,6 +193,10 @@ class SQLExperimentResultWriter(ExperimentResultWriter):
         return False
 
     def write_experiment_result(self, session_id: str, result: ExperimentResult[Any]) -> None:
+        if isinstance(result.result, Exception):
+            # for now, do not write any result
+            # TODO: eventually include an error column so errors can be stored
+            return
         experiment_type = type(result.experiment)
         result_entry_type = experiment_type.result_entry_type()
         # combine experiment and result data into a single table entry
@@ -265,8 +268,10 @@ class ExperimentRunner(Iterable[Experiment[Any]], Sized):
         experiments = self._get_experiments()
         num_experiments = len(experiments)
         LOGGER.info(f'Running {num_experiments:,d} experiments with {self.num_threads} thread(s)...')
-        func = partial(Experiment.get_results, error_mode=self.error_mode, verbosity=self.verbosity, debug=self.debug)
-        all_results = parallel_map(func, experiments, num_threads=self.num_threads, progress=True)
+        func = partial(Experiment.get_result, error_mode=self.error_mode, verbosity=self.verbosity, debug=self.debug)
+        # if shuffling experiments, no need to return the results in the original order
+        ordered = not self.shuffle
+        all_results = parallel_map(func, experiments, num_threads=self.num_threads, ordered=ordered, progress=True)
         # TODO: use milliseconds? Use a hash of the experiment data instead?
         # create ID for the entire session of experiment runs
         session_id = datetime.now().strftime('%Y%m%d%H%M%S')

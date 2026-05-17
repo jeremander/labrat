@@ -49,8 +49,8 @@ class MonteCarloExperiment(Generic[S, R], RandomExperiment[R]):
         """Given a seed, produces a random sample."""
 
     @abstractmethod
-    def get_result(self, sample: S) -> R:
+    def result_from_sample(self, sample: S) -> R:
         """Given a sample, gets a result."""
 
     def run_with_seed(self, seed: Optional[int]) -> R:
-        return self.get_result(self.sample(seed))
+        return self.result_from_sample(self.sample(seed))
