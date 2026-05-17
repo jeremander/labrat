@@ -23,7 +23,6 @@ def get_trial_seed(base_seed: int, trial: int) -> int:
 @dataclass
 class RandomExperiment(Experiment[R]):
     """An experiment with some randomness involved.
-
     Such experiments are typically run with multiple trials."""
     # index of a trial
     trial: int = 0

@@ -67,6 +67,14 @@ class Params(Iterable[JSONDict], Sized):
         are indices ranging from 0 to (num_trials - 1)."""
         return cast(ParamProduct, self * SingleParamGrid('trial', range(num_trials)))
 
+    def with_constants(self, constants: dict[str, Any]) -> ParamProduct:
+        """Returns an updated Params where the given constant values have been inserted."""
+        return cast(ParamProduct, self * ParamList([constants]))
+
+    def with_constant(self, name: str, value: Any) -> ParamProduct:  # noqa: ANN401
+        """Returns an updated Params where the given named parameter is included with a constant value."""
+        return self.with_constants({name: value})
+
     def __mul__(self, other: Self) -> Params:
         return type(self).product(self, other)
 
