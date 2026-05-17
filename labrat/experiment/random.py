@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import hashlib
 from typing import Optional, TypeVar
 
-from labrat.experiment import Experiment, Result
+from labrat.experiment._base import Experiment, Result
 
 
 R = TypeVar('R', bound=Result)

@@ -5,14 +5,14 @@ from typing import Generic, TypeVar
 
 from fancy_dataclass import SQLDataclass
 
-from labrat.experiment import Experiment, Result
+from labrat.experiment._base import Experiment, Result
 
 
 # state type
 S = TypeVar('S')  # state
 # input type
 I = TypeVar('I')  # noqa: E741
-R = TypeVar('R', bound = Result)  # result
+R = TypeVar('R', bound=Result)  # result
 T = TypeVar('T')
 
 
