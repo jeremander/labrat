@@ -5,7 +5,8 @@ import random
 from typing import Any
 
 from labrat import LOGGER
-from labrat.experiment._base import ErrorMode, Experiment, ExperimentResultWriter, ResultEntry
+from labrat.experiment._base import ErrorMode, Experiment, ResultEntry
+from labrat.experiment.writer import ExperimentResultWriter
 from labrat.params import Params
 from labrat.utils import parallel_map
 

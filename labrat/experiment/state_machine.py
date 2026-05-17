@@ -42,7 +42,7 @@ class StateMachineExperiment(Experiment[R], Generic[S, I, R]):
         """Generates a sequence of inputs to the state machine."""
 
     @abstractmethod
-    def get_result(self, state: S) -> R:
+    def get_result_from_state(self, state: S) -> R:
         """Gets the result for the given state."""
 
     def run(self) -> R:
@@ -52,4 +52,4 @@ class StateMachineExperiment(Experiment[R], Generic[S, I, R]):
                 break
             state = self.state_machine.transition(state, val)
         # finish looping if a final state is reached, or input sequence is exhausted
-        return self.get_result(state)
+        return self.get_result_from_state(state)
