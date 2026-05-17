@@ -128,10 +128,11 @@ class Experiment(JSONDataclass, Generic[R], ABC, store_type='off', allow_extra_f
                 result=result,
             )
         except Exception as e:
-            if debug:
-                exception = e  # noqa: F841
-                breakpoint()  # noqa: T100
             if isinstance(e, (KeyboardInterrupt, bdb.BdbQuit)) or (error_mode == 'raise'):
+                raise
+            if debug:
+                import pdb  # noqa: T100
+                pdb.post_mortem()
                 raise
             if error_mode == 'warn':
                 logger = self.logger()
@@ -224,6 +225,10 @@ class ExperimentRunner(Iterable[Experiment[Any]], Sized):
     no_rerun: bool = False  # do not re-run the same experiment if already in the database
     debug: bool = False  # drop into debugger if an error occurs (single-threaded only)
 
+    def __post_init__(self) -> None:
+        if self.debug and (self.num_threads > 1):
+            raise ValueError('cannot set debug = True when num_threads > 1')
+
     def __iter__(self) -> Iterator[Experiment[Any]]:
         for (cls, params) in self.params.items():
             yield from (cls.from_dict(d) for d in params)
@@ -260,9 +265,7 @@ class ExperimentRunner(Iterable[Experiment[Any]], Sized):
         experiments = self._get_experiments()
         num_experiments = len(experiments)
         LOGGER.info(f'Running {num_experiments:,d} experiments with {self.num_threads} thread(s)...')
-        # only enter debugger if in single-threaded mode
-        debug = self.debug if (self.num_threads == 1) else False
-        func = partial(Experiment.get_results, error_mode=self.error_mode, verbosity=self.verbosity, debug=debug)
+        func = partial(Experiment.get_results, error_mode=self.error_mode, verbosity=self.verbosity, debug=self.debug)
         all_results = parallel_map(func, experiments, num_threads=self.num_threads, progress=True)
         # TODO: use milliseconds? Use a hash of the experiment data instead?
         # create ID for the entire session of experiment runs
