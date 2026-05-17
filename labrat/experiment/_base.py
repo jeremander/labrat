@@ -9,7 +9,6 @@ from dataclasses import MISSING, dataclass, fields, is_dataclass, make_dataclass
 from datetime import datetime
 from functools import cache, cached_property, partial, reduce
 from logging import Logger
-import multiprocessing as mp
 import random
 from typing import Any, Generic, Literal, Optional, TypeAlias, TypeVar, cast, get_args, get_origin
 
@@ -18,10 +17,10 @@ from fancy_dataclass.sql import DEFAULT_REGISTRY, SQLDataclass, register
 from sqlalchemy import Column, Integer, and_, create_engine
 from sqlalchemy.future.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
-from tqdm import tqdm
 
 from labrat import LOGGER, get_logger
 from labrat.params import Params
+from labrat.utils import parallel_map
 
 
 T = TypeVar('T')
@@ -143,6 +142,9 @@ class Experiment(JSONDataclass, Generic[R], ABC, store_type='off', allow_extra_f
                 result=result,
             )
         except Exception as e:
+            if debug:
+                exception = e  # noqa: F841
+                breakpoint()  # noqa: T100
             if isinstance(e, (KeyboardInterrupt, bdb.BdbQuit)) or (error_mode == 'raise'):
                 raise
             if error_mode == 'warn':
@@ -231,20 +233,16 @@ class ExperimentRunner(Iterable[Experiment[R]], Sized):
         experiments = self._get_experiments(session)
         num_experiments = len(experiments)
         LOGGER.info(f'Running {num_experiments:,d} experiments with {self.num_threads} thread(s)...')
-        # TODO: refactor this into parallel_map utility function (including tqdm wrapper)
-        pool = mp.Pool(self.num_threads)
-        if self.num_threads == 1:
-            mapper: Any = map
-            debug = self.debug
-        else:
-            mapper = partial(pool.imap_unordered, chunksize=self.chunk_size)
-            debug = False
+        # only enter debugger if in single-threaded mode
+        debug = self.debug if (self.num_threads == 1) else False
         func = partial(Experiment.get_results, error_mode=self.error_mode, verbosity=self.verbosity, debug=debug)
-        all_results: Iterable[ExperimentResult[R]] = mapper(func, experiments)
+        all_results = parallel_map(func, experiments, num_threads=self.num_threads, progress=True)
         # TODO: use milliseconds? Use a hash of the experiment data instead?
         # TODO: call this runner_id instead?
         experiment_id = datetime.now().strftime('%Y%m%d%H%M%S')
-        for result in tqdm(all_results, total=num_experiments):
+        LOGGER.info('Processing results...')
+        for result in all_results:
+            # TODO: handle errors
             if result is not None:
                 self._process_experiment_result(session, experiment_id, result)
         LOGGER.info('\033[1m' + 'DONE!')
