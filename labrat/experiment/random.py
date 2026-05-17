@@ -1,12 +1,13 @@
 from abc import abstractmethod
 from dataclasses import dataclass
 import hashlib
-from typing import Optional, TypeVar
+from typing import Generic, Optional, TypeVar
 
 from labrat.experiment._base import Experiment, Result
 
 
 R = TypeVar('R', bound=Result)
+S = TypeVar('S')
 
 
 def get_trial_seed(base_seed: int, trial: int) -> int:
@@ -37,3 +38,19 @@ class RandomExperiment(Experiment[R]):
 
     def run(self) -> R:
         return self.run_with_seed(self.get_trial_seed())
+
+
+@dataclass
+class MonteCarloExperiment(Generic[S, R], RandomExperiment[R]):
+    """A Monte Carlo experiment, which generates random samples and then evaluates them."""
+
+    @abstractmethod
+    def sample(self, seed: Optional[int]) -> S:
+        """Given a seed, produces a random sample."""
+
+    @abstractmethod
+    def get_result(self, sample: S) -> R:
+        """Given a sample, gets a result."""
+
+    def run_with_seed(self, seed: Optional[int]) -> R:
+        return self.get_result(self.sample(seed))

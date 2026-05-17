@@ -4,6 +4,7 @@ from ._base import ExperimentResult as ExperimentResult
 from ._base import ExperimentRunner as ExperimentRunner
 from ._base import Result as Result
 from ._base import ResultEntry as ResultEntry
+from .random import MonteCarloExperiment as MonteCarloExperiment
 from .random import RandomExperiment as RandomExperiment
 from .state_machine import StateMachine as StateMachine
 from .state_machine import StateMachineExperiment as StateMachineExperiment
