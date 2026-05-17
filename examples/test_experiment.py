@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import time
 
-from labrat.experiment import Experiment, ExperimentRunner, Result
+from labrat.experiment import Experiment, ExperimentRunner, Result, sql_writer
 from labrat.params import Params
 
 
@@ -37,6 +37,7 @@ if __name__ == '__main__':
     params2 = Params.grid({'x' : ['abc', 'def'], 'y' : [1, 2]})
     params: dict[type[Experiment[MyResult]], Params] = {Experiment1: params1, Experiment2: params2}
 
-    runner: ExperimentRunner[MyResult] = ExperimentRunner(params, 'sqlite:///test.sqlite', num_threads=4)
-    # runner: ExperimentRunner[MyResult] = ExperimentRunner(params, engine, num_threads=1)
+    result_writer = sql_writer('sqlite:///test.sqlite')
+    num_threads = 4
+    runner = ExperimentRunner(params, result_writer, num_threads=num_threads)
     runner.run()

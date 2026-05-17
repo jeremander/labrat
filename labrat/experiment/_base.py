@@ -38,7 +38,7 @@ R = TypeVar('R', bound=Result)
 
 class ResultEntry(SQLDataclass, JSONDataclass, store_type='off'):  # type: ignore[misc]
     """A record containing info about an experiment and a single result."""
-    experiment_id: str
+    session_id: str
     start_time: datetime
     end_time: datetime
 
@@ -105,20 +105,6 @@ class Experiment(JSONDataclass, Generic[R], ABC, store_type='off', allow_extra_f
         }
         return cast(type[ResultEntry], register(extra_cols=extra_cols)(dcls))
 
-    def is_in_database(self, session: Session) -> bool:
-        """Determines if an Experiment is already in the database for a given Session.
-        This means there is at least one result entry for the experiment."""
-        result_entry_cls = self.result_entry_type()
-        flt = reduce(
-            and_,
-            (getattr(result_entry_cls, field.name) == getattr(self, field.name) for field in fields(self)),
-        )
-        rows = session.query(result_entry_cls).filter(flt)
-        with suppress(StopIteration):
-            _ = next(iter(rows))
-            return True
-        return False
-
     @abstractmethod
     def run(self) -> R:
         """Runs the experiment, returning a result of type R."""
@@ -154,11 +140,82 @@ class Experiment(JSONDataclass, Generic[R], ABC, store_type='off', allow_extra_f
         return None
 
 
+class ExperimentResultWriter(ABC):
+    """Class responsible for writing an ExperimentResult to a file or database."""
+
+    def setup(self, experiment_types: Iterable[type[Experiment[Any]]]) -> None:  # noqa: B027
+        """Given the Experiment types which will be run, performs any setup steps, such as creating files or database
+        tables."""
+        pass
+
+    @abstractmethod
+    def experiment_was_written(self, experiment: Experiment[Any]) -> bool:
+        """Determines if an Experiment was already written.
+        This means there is at least one result entry corresponding to the experiment."""
+
+    @abstractmethod
+    def write_experiment_result(self, session_id: str, result: ExperimentResult[R]) -> None:
+        """Writes the result of a single experiment."""
+
+
 @dataclass(frozen=True)
-class ExperimentRunner(Iterable[Experiment[R]], Sized):
+class SQLExperimentResultWriter(ExperimentResultWriter):
+    engine: Engine  # sqlalchemy Engine storing result data for all experiments
+
+    def __init__(self, engine: str | Engine) -> None:
+        if isinstance(engine, str):
+            engine = create_engine(engine)
+        object.__setattr__(self, 'engine', engine)
+
+    @cached_property
+    def session(self) -> Session:
+        return sessionmaker(bind=self.engine)()
+
+    def setup(self, experiment_types: Iterable[type[Experiment[Any]]]) -> None:
+        # creates SQL tables for every experiment
+        for experiment_type in experiment_types:
+            _ = experiment_type.result_entry_type()
+        DEFAULT_REGISTRY.metadata.create_all(self.engine)
+        # create the Session object for performing database actions
+        _ = self.session
+
+    def experiment_was_written(self, experiment: Experiment[Any]) -> bool:
+        # check if any result for this experiment is already in the database
+        result_entry_type = experiment.result_entry_type()
+        flt = reduce(
+            and_,
+            (getattr(result_entry_type, field.name) == getattr(experiment, field.name) for field in fields(experiment)),
+        )
+        rows = self.session.query(result_entry_type).filter(flt)
+        with suppress(StopIteration):
+            _ = next(iter(rows))
+            return True
+        return False
+
+    def write_experiment_result(self, session_id: str, result: ExperimentResult[Any]) -> None:
+        experiment_type = type(result.experiment)
+        result_entry_type = experiment_type.result_entry_type()
+        # combine experiment and result data into a single table entry
+        result_dict = {**result.experiment.to_dict(), **result.result.to_dict()}
+        entry = result_entry_type.from_dict(result_dict)  # automatically infers subtype
+        entry.session_id = session_id
+        entry.start_time = result.start_time
+        entry.end_time = result.end_time
+        # write the result to the database
+        self.session.add(entry)
+        self.session.commit()
+
+
+def sql_writer(engine: str | Engine) -> SQLExperimentResultWriter:
+    """Convenience function for constructing a SQLExperimentResultWriter."""
+    return SQLExperimentResultWriter(engine)
+
+
+@dataclass(frozen=True)
+class ExperimentRunner(Iterable[Experiment[Any]], Sized):
     """Main driver for running experiments."""
-    params: dict[type[Experiment[R]], Params]  # mapping from experiment class to parameters
-    engine: str | Engine  # SQL engine
+    params: dict[type[Experiment[Any]], Params]  # mapping from experiment class to parameters
+    result_writer: ExperimentResultWriter  # object responsible for writing the results
     verbosity: int = 0  # verbosity level
     error_mode: ErrorMode = 'warn'  # how to handle errors (ignore, warn, raise)
     num_threads: int = 1  # number of threads to use
@@ -167,14 +224,7 @@ class ExperimentRunner(Iterable[Experiment[R]], Sized):
     no_rerun: bool = False  # do not re-run the same experiment if already in the database
     debug: bool = False  # drop into debugger if an error occurs (single-threaded only)
 
-    @cached_property
-    def _engine(self) -> Engine:
-        """Gets the sqlalchemy Engine storing the result data for all experiments."""
-        if isinstance(self.engine, str):
-            return create_engine(self.engine)
-        return self.engine
-
-    def __iter__(self) -> Iterator[Experiment[R]]:
+    def __iter__(self) -> Iterator[Experiment[Any]]:
         for (cls, params) in self.params.items():
             yield from (cls.from_dict(d) for d in params)
 
@@ -182,29 +232,20 @@ class ExperimentRunner(Iterable[Experiment[R]], Sized):
         return sum(map(len, self.params.values()))
 
     @cached_property
-    def result_entry_types(self) -> dict[type[Experiment[R]], type[ResultEntry]]:
+    def result_entry_types(self) -> dict[type[Experiment[Any]], type[ResultEntry]]:
         """Gets a mapping from Experiment classes to ResultEntry classes which store both parameters and results."""
         return {cls: cls.result_entry_type() for cls in self.params}
 
-    def create_tables(self) -> None:
-        """Creates SQL tables for every experiment."""
-        # create all the tables
-        for cls in self.params:
-            _ = cls.result_entry_type()
-        DEFAULT_REGISTRY.metadata.create_all(self._engine)
-
-    def make_session(self) -> Session:
-        """Creates a new SQLAlchemy session."""
-        return sessionmaker(bind=self._engine)()
-
-    def _get_experiments(self, session: Session) -> list[Experiment[R]]:
+    def _get_experiments(self) -> list[Experiment[Any]]:
         experiments = list(self)
         num_experiments = len(self)
         LOGGER.info(f'Parameters specify {num_experiments:,d} experiments.')
         if self.no_rerun:
             LOGGER.info('Filtering out already-run experiments.')
-            # filter out experiments already in the database
-            experiments = [experiment for experiment in experiments if not experiment.is_in_database(session)]
+            # filter out experiments which were already written
+            experiments = [
+                experiment for experiment in experiments if not self.result_writer.experiment_was_written(experiment)
+            ]
             num_filtered_experiments = len(experiments)
             if num_filtered_experiments < num_experiments:
                 LOGGER.info(f'Filtered to {num_filtered_experiments} experiments.')
@@ -213,24 +254,10 @@ class ExperimentRunner(Iterable[Experiment[R]], Sized):
             random.shuffle(experiments)
         return experiments
 
-    def _process_experiment_result(self, session: Session, experiment_id: str, result: ExperimentResult[R]) -> None:
-        """Processes the results of a single experiment."""
-        experiment_type = type(result.experiment)
-        result_entry_type = self.result_entry_types[experiment_type]
-        # combine experiment and result data into a single table entry
-        result_dict = {**result.experiment.to_dict(), **result.result.to_dict()}
-        entry = result_entry_type.from_dict(result_dict)  # automatically infers subtype
-        entry.experiment_id = experiment_id
-        entry.start_time = result.start_time
-        entry.end_time = result.end_time
-        session.add(entry)
-        session.commit()
-
     def run(self) -> None:
         """Runs all experiments."""
-        self.create_tables()
-        session = self.make_session()
-        experiments = self._get_experiments(session)
+        self.result_writer.setup(self.params)
+        experiments = self._get_experiments()
         num_experiments = len(experiments)
         LOGGER.info(f'Running {num_experiments:,d} experiments with {self.num_threads} thread(s)...')
         # only enter debugger if in single-threaded mode
@@ -238,11 +265,11 @@ class ExperimentRunner(Iterable[Experiment[R]], Sized):
         func = partial(Experiment.get_results, error_mode=self.error_mode, verbosity=self.verbosity, debug=debug)
         all_results = parallel_map(func, experiments, num_threads=self.num_threads, progress=True)
         # TODO: use milliseconds? Use a hash of the experiment data instead?
-        # TODO: call this runner_id instead?
-        experiment_id = datetime.now().strftime('%Y%m%d%H%M%S')
+        # create ID for the entire session of experiment runs
+        session_id = datetime.now().strftime('%Y%m%d%H%M%S')
         LOGGER.info('Processing results...')
         for result in all_results:
             # TODO: handle errors
             if result is not None:
-                self._process_experiment_result(session, experiment_id, result)
+                self.result_writer.write_experiment_result(session_id, result)
         LOGGER.info('\033[1m' + 'DONE!')
