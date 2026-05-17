@@ -17,7 +17,7 @@ classifiers = [
 ]
 dependencies = [
   "colorlog",
-  "fancy_dataclass",
+  "fancy_dataclass >= 0.10.3",
   "sqlalchemy",
   "tqdm",
   "typing_extensions",

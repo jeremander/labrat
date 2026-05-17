@@ -2,7 +2,7 @@ from ._base import ErrorMode as ErrorMode
 from ._base import Experiment as Experiment
 from ._base import ExperimentResult as ExperimentResult
 from ._base import Result as Result
-from ._base import ResultEntry as ResultEntry
+from ._base import run_experiment as run_experiment
 from .random import MonteCarloExperiment as MonteCarloExperiment
 from .random import RandomExperiment as RandomExperiment
 from .runner import ExperimentRunner as ExperimentRunner

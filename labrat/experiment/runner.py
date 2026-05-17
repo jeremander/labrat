@@ -1,11 +1,14 @@
 from dataclasses import dataclass
 from datetime import datetime
-from functools import cached_property, partial
+from functools import partial
 import random
-from typing import Any
+from typing import Annotated, Any
+import warnings
+
+from typing_extensions import Doc
 
 from labrat import LOGGER
-from labrat.experiment._base import ErrorMode, Experiment, ResultEntry
+from labrat.experiment._base import ErrorMode, Experiment, run_experiment
 from labrat.experiment.writer import ExperimentResultWriter
 from labrat.params import Params
 from labrat.utils import parallel_map
@@ -14,27 +17,49 @@ from labrat.utils import parallel_map
 @dataclass(frozen=True)
 class ExperimentRunner:
     """Main driver for running experiments."""
-    params: dict[type[Experiment[Any]], Params]  # mapping from experiment class to parameters
-    result_writer: ExperimentResultWriter  # object responsible for writing the results
-    verbosity: int = 0  # verbosity level
-    error_mode: ErrorMode = 'warn'  # how to handle errors (ignore, warn, raise)
-    num_threads: int = 1  # number of threads to use
-    chunk_size: int = 1  # number of experiments per chunk
-    shuffle: bool = False  # shuffle the experiments
-    no_rerun: bool = False  # do not re-run the same experiment if already in the database
-    debug: bool = False  # drop into debugger if an error occurs (single-threaded only)
+    params: Annotated[
+        dict[type[Experiment[Any]], Params],
+        Doc('mapping from experiment class to parameters'),
+    ]
+    result_writer: Annotated[
+        ExperimentResultWriter,
+        Doc('object responsible for writing the results'),
+    ]
+    verbosity: Annotated[
+        int,
+        Doc('verbosity level'),
+    ] = 0
+    error_mode: Annotated[
+        ErrorMode,
+        Doc('how to handle errors (ignore, warn, raise)'),
+    ] = 'warn'
+    num_threads: Annotated[
+        int,
+        Doc('number of threads to use'),
+    ] = 1
+    chunk_size: Annotated[
+        int,
+        Doc('number of experiments per chunk, when parallelizing'),
+    ] = 1
+    shuffle: Annotated[
+        bool,
+        Doc('randomly shuffle the experiments'),
+    ] = False
+    no_rerun: Annotated[
+        bool,
+        Doc('do not re-run the same experiment if its result was already written'),
+    ] = False
+    debug: Annotated[
+        bool,
+        Doc('drop into debugger if an error occurs (single-threaded only)'),
+    ] = False
 
     def __post_init__(self) -> None:
         if self.debug and (self.num_threads > 1):
-            raise ValueError('cannot set debug = True when num_threads > 1')
+            warnings.warn('debug = True will have no effect when num_threads > 1', UserWarning, stacklevel=1)
 
     def get_experiments(self) -> list[Experiment[Any]]:
         return [cls.from_dict(d) for (cls, params) in self.params.items() for d in params]
-
-    @cached_property
-    def result_entry_types(self) -> dict[type[Experiment[Any]], type[ResultEntry]]:
-        """Gets a mapping from Experiment classes to ResultEntry classes which store both parameters and results."""
-        return {cls: cls.result_entry_type() for cls in self.params}
 
     def _get_experiments(self) -> list[Experiment[Any]]:
         experiments = self.get_experiments()
@@ -60,7 +85,8 @@ class ExperimentRunner:
         experiments = self._get_experiments()
         num_experiments = len(experiments)
         LOGGER.info(f'Running {num_experiments:,d} experiments with {self.num_threads} thread(s)...')
-        func = partial(Experiment.get_result, error_mode=self.error_mode, verbosity=self.verbosity, debug=self.debug)
+        debug = self.debug and (self.num_threads <= 1)
+        func = partial(run_experiment, error_mode=self.error_mode, verbosity=self.verbosity, debug=debug)
         # if shuffling experiments, no need to return the results in the original order
         ordered = not self.shuffle
         all_results = parallel_map(func, experiments, num_threads=self.num_threads, ordered=ordered, progress=True)
