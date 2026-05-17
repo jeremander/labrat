@@ -2,8 +2,9 @@ from abc import ABC, abstractmethod
 import bdb
 from dataclasses import dataclass
 from datetime import datetime
+import inspect
 from logging import Logger
-from typing import Annotated, Generic, Literal, Optional, TypeAlias, TypeVar, get_args, get_origin
+from typing import Annotated, Any, ClassVar, Generic, Literal, Optional, TypeAlias, TypeVar, cast, get_args, get_origin
 
 from fancy_dataclass import JSONDataclass
 from typing_extensions import Doc
@@ -32,22 +33,35 @@ class Experiment(JSONDataclass, Generic[R], ABC, store_type='off', allow_extra_f
 
     An instance of an Experiment represents an experimental trial with one particular choice of parameters.
     The result will be stored in the type's SQL table."""
+    result_type: ClassVar[type[R]]  # stores the result type so it can be accessed at runtime
+
+    @staticmethod
+    def _get_result_type_arg(cls: type['Experiment[Any]']) -> Optional[type[Result]]:
+        for base in cls.__orig_bases__:  # type: ignore[attr-defined]
+            if (origin := get_origin(base)) and issubclass(origin, Experiment):
+                for arg in get_args(base):
+                    if isinstance(arg, type) and issubclass(arg, Result):
+                        return arg
+        return None
+
+    def __init_subclass__(cls, *args: type, **kwargs: Any) -> None:  # noqa: ANN401
+        super().__init_subclass__(**kwargs)  # must forward kwargs
+        if not inspect.isabstract(cls):
+            if hasattr(cls, 'result_type'):
+                result_type: Optional[type[R]] = cls.result_type
+            else:
+                # infer the result type from the first generic parameter whose type is a subclass of Result
+                result_type = cast(type[R], Experiment._get_result_type_arg(cls))
+            if result_type is None:
+                raise TypeError(f'{cls.__name__} must define a result_type ClassVar')
+            if not (isinstance(result_type, type) and issubclass(result_type, Result)):
+                raise TypeError(f'result_type for {cls.__name__} must be a subclass of {Result.__qualname__}')
+            cls.result_type = result_type
 
     @classmethod
     def logger(cls) -> Logger:
         """Gets a logger for this particular Experiment subclass."""
         return get_logger(cls.__name__)
-
-    @classmethod
-    def result_type(cls) -> type[R]:
-        """Gets the Result subclass.
-        Infers this from the parameter R of the Experiment[R] class from which this subclass should inherit."""
-        # TODO: this is brittle, since there could be multiple generic types!
-        # Instead, make it a required ClassVar or something.
-        for base in cls.__orig_bases__:  # type: ignore[attr-defined]
-            if (origin := get_origin(base)) and issubclass(origin, Experiment):
-                return get_args(base)[0]  # type: ignore[no-any-return]
-        raise TypeError('Experiment subclass must inherit from Experiment[R] for some Result subclass R')
 
     @abstractmethod
     def run(self) -> R:

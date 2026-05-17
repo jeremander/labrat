@@ -28,7 +28,7 @@ def _generate_result_entry_type_fields(experiment_type: type[Experiment[R]]) -> 
                 assert is_dataclass(experiment_type)
                 yield from fields(experiment_type)
             case 'result':
-                result_type = experiment_type.result_type()
+                result_type = experiment_type.result_type
                 assert is_dataclass(result_type)
                 yield from fields(result_type)
             case _:
