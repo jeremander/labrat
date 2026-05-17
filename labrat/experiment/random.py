@@ -10,11 +10,14 @@ R = TypeVar('R', bound=Result)
 S = TypeVar('S')
 
 
+MAX_SEED = 2 ** 32
+
+
 def get_trial_seed(base_seed: int, trial: int) -> int:
     """Given a base seed and trial index, creates a new seed specific to the trial.
     Uses a SHA-256 hash to "mix" the base seed and trial together in an unpredictable way."""
     h = hashlib.sha256(f'{base_seed}:{trial}'.encode()).digest()
-    return int.from_bytes(h[:8], 'little')
+    return int.from_bytes(h[:8], 'little') % MAX_SEED
 
 
 @dataclass

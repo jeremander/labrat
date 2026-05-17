@@ -2,12 +2,12 @@ from ._base import ErrorMode as ErrorMode
 from ._base import Experiment as Experiment
 from ._base import ExperimentResult as ExperimentResult
 from ._base import ExperimentResultWriter as ExperimentResultWriter
-from ._base import ExperimentRunner as ExperimentRunner
 from ._base import Result as Result
 from ._base import ResultEntry as ResultEntry
 from ._base import SQLExperimentResultWriter as SQLExperimentResultWriter
 from ._base import sql_writer as sql_writer
 from .random import MonteCarloExperiment as MonteCarloExperiment
 from .random import RandomExperiment as RandomExperiment
+from .runner import ExperimentRunner as ExperimentRunner
 from .state_machine import StateMachine as StateMachine
 from .state_machine import StateMachineExperiment as StateMachineExperiment

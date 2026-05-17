@@ -29,9 +29,10 @@ class Params(Iterable[JSONDict], Sized):
         return ParamList([])
 
     @classmethod
-    def single(cls, params: JSONDict) -> Params:
-        """Constructor from a single parameter dict."""
-        return ParamList([params])
+    def single(cls, name: str, values: list[Any]) -> Params:
+        """Constructor from a parameter name and a list of values.
+        This is essentially the same as Params.grid when only a single parameter is present in the grid."""
+        return SingleParamGrid(name, values)
 
     @classmethod
     def product(cls, *params: Self) -> Params:
@@ -39,7 +40,7 @@ class Params(Iterable[JSONDict], Sized):
         Raises a ValueError if any keys overlap."""
         match params:
             case ():
-                return cls.single({})
+                return ParamList([{}])
             case (ps,):
                 return ps
             case _:
